@@ -21,8 +21,15 @@
 //https://github.com/ndevilla/iniparser
 #define MAC_STRING_LENGTH 13
 #define ERROR(fmt, ...) do { printf(fmt, __VA_ARGS__); return -1; } while(0)
+
+#define LOG(fmt, ...)                                                   \
+  do {                                                                  \
+    fprintf(stderr, "%s:%d: log: " fmt "\n", __func__, __LINE__,        \
+            ##__VA_ARGS__);                                             \
+  } while (0)
+
 void *connection_handler(void *);
-const char *printData(char *);
+char *printData(char *);
 typedef struct collectData {
     char *interface_name;
 }client;
@@ -85,10 +92,10 @@ int already_there(char *interfacename) {
         return 1;
       }
     }
+    return 0;
 }
 //funkcja sprawdza status danego interfejsu
 int check_status(char *ifname) {
-    int state = -1;
     int socId = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (socId < 0) ERROR("Socket failed. Errno = %d\n", errno);
 
@@ -125,42 +132,53 @@ char *getmac(char *iface){
 //f. ustawia ip i maske adres interfejsu
 void set_new_interface_data(char *inter_data){
   char nazwa[8], ip[16], mask[16];
+  int result;
+  LOG("inter_data='%s'", inter_data);
   strcpy(nazwa, strtok(inter_data, ":"));
   strcpy(ip, strtok(NULL, ":"));
   strcpy(mask, strtok(NULL, ":"));
   struct ifreq ifr;
-  struct sockaddr_in* addr = (struct sockaddr_in*)&ifr.ifr_addr;
+  /* struct sockaddr_in* addr = (struct sockaddr_in*)&ifr.ifr_addr; */
   const char * name = nazwa;
   int fd = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
   int ip_check, mask_check;
   strncpy(ifr.ifr_name, name, IFNAMSIZ);
   ifr.ifr_addr.sa_family = AF_INET;
-    ip_check = inet_pton(AF_INET, ip , ifr.ifr_addr.sa_data + 2);
-    ioctl(fd, SIOCSIFADDR, &ifr);
-    mask_check = inet_pton(AF_INET, mask , ifr.ifr_addr.sa_data + 2);
-    ioctl(fd, SIOCSIFNETMASK, &ifr);
+  ip_check = inet_pton(AF_INET, ip , ifr.ifr_addr.sa_data + 2);
+  result = ioctl(fd, SIOCSIFADDR, &ifr);
+  LOG("SIOCSIFADDR: result=%d\n", result);
+  mask_check = inet_pton(AF_INET, mask , ifr.ifr_addr.sa_data + 2);
+  result = ioctl(fd, SIOCSIFNETMASK, &ifr);
+  LOG("SIOCSIFNETMASK: result=%d\n", result);
 
-    //do rozbudowy
-    if(ip_check <=0 || mask_check <= 0){
-        printData("error");
-      }
+  //do rozbudowy
+  if(ip_check <=0 || mask_check <= 0){
+    printData("error");
+  }
 
 
-    ioctl(fd, SIOCGIFFLAGS, &ifr);
-    strncpy(ifr.ifr_name, name, IFNAMSIZ);
-    ifr.ifr_flags |= (IFF_UP | IFF_RUNNING);
+  ioctl(fd, SIOCGIFFLAGS, &ifr);
+  strncpy(ifr.ifr_name, name, IFNAMSIZ);
+  ifr.ifr_flags |= (IFF_UP | IFF_RUNNING);
 
-    ioctl(fd, SIOCSIFFLAGS, &ifr);
-    printData("ok");
+  result = ioctl(fd, SIOCSIFFLAGS, &ifr);
+  LOG("SIOCSIFFLAGS: result=%d\n", result);
+  LOG("Exit");
+/*  char *r = printData("ok");
+  free(r);
+*/
 }
 //tworzy tablice z dostepnymi interfejsami - interfaces
 char *list_interfaces(char *msg){
   char *recv_msg =(char *) malloc(sizeof(char) *(100+1));
   struct ifaddrs *ifaddr, *ifa;
-
   int family, s, n;
   char host[NI_MAXHOST];
   char mask[NI_MAXHOST];
+
+  LOG("Entry: msg=%s", msg);
+
+  memset(recv_msg, 0, 100+1);
   if (getifaddrs(&ifaddr) == -1) {
       perror("getifaddrs");
       exit(EXIT_FAILURE);
@@ -261,13 +279,15 @@ char *list_interfaces(char *msg){
   }
 
   freeifaddrs(ifaddr);
+  LOG("Exit: recv_msg=%s", recv_msg);
   return recv_msg;
 }
 
 //wyświetlanie danych
-const char * printData(char *client_m){
+char * printData(char *client_m){
   char *rec_msg =(char *) malloc(sizeof(char) *(1999+1));
   char *odpow;
+  LOG("entry %s", client_m);
   if(strcmp (client_m, "help") == 0){
     odpow = list_interfaces(client_m);
     rec_msg = strcpy(rec_msg, odpow);
@@ -309,60 +329,68 @@ const char * printData(char *client_m){
     free(odpow);
   }
    else{
+#if 0
      odpow = list_interfaces(client_m);
      rec_msg = strcpy(rec_msg, odpow);
      free(odpow);
+#endif // 0
+     strcpy(rec_msg, "Super ale nie znam tego");
   }
+  LOG("exit %s", rec_msg);
   return rec_msg;
 
 }
 //funkcja zarzadza polaczeniami
 void *connection_handler(void *socket_desc){
 
-	int sock = *(int*)socket_desc;
-	int read_size;
-	char *message , client_message[2000];
+  int sock = *(int*)socket_desc;
+  int read_size;
+  char *message , client_message[2000];
   char *odp;
 
   //wiadomość dla klienta
-	message = "Witaj!\n";
-	write(sock, message, strlen(message));
+  message = "Witaj!\n";
+  write(sock, message, strlen(message));
 
-	//Odpowiedź klienta
-	while( ( read_size = recv(sock , client_message , 2000 ,0))>0 )	{
+  //Odpowiedź klienta
+  while( ( read_size = recv(sock , client_message , 2000 ,0))>0 )	{
+    LOG("Read message: %s", client_message);
     for (int i=0; client_message[i]; i++){
-     client_message[i] = tolower(client_message[i]);
+      client_message[i] = tolower(client_message[i]);
     }
     if(strcmp(client_message, "setinter")== 0){
       message = "Podaj nazwe interface, IP i Maske w formacie nazwa:xxx.xxx.xxx.xxx:xxx.xxx.xxx.xxx";
-      write(sock, message, strlen(message)+1);
-       while ((read_size = recv(sock , client_message , 2000 ,0))>0){
-         set_new_interface_data(client_message);
-       }
+      write(sock, message, strlen(message));
+      while ((read_size = recv(sock , client_message , 2000 ,0))>0){
+        LOG("read_size=%d msg=%s\n", read_size, client_message);
+        set_new_interface_data(client_message);
+        write(sock, "zrobione", strlen("zrobione"));
+        break;
+      }
     }else{
-    odp = printData(client_message);
+      odp = printData(client_message);
       write(sock, odp, strlen(odp)+1);
       memset(client_message, 0, sizeof(client_message));
       free(odp);
       fflush(stdout);
-        }
-      }
+    }
+  }
 
-	if(read_size == 0)
-	{
-		puts("Klient rozłączył się");
+  if(read_size == 0)
+  {
+    puts("Klient rozłączył się");
     limit_users --;
-		fflush(stdout);
-	}
-	else if(read_size == -1)
-	{
-		perror("odpowiedź błędna");
-	}
-	//zwolnić gniazdo
+    fflush(stdout);
+  }
+  else if(read_size == -1)
+  {
+    perror("odpowiedź błędna");
+  }
+  //zwolnić gniazdo
   free(socket_desc);
 
-	return 0;
-}
+  return 0;}
+
 
 int main(int argc, char *argv[]){
 
@@ -383,6 +411,13 @@ int main(int argc, char *argv[]){
 	server.sin_family = AF_INET;
 	server.sin_addr.s_addr = INADDR_ANY;
 	server.sin_port = htons(port);
+
+        int reuse = 1;
+        if (setsockopt(socket_desc, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+          perror("setsockopt(SO_REUSEADDR) failed");
+
+        if (setsockopt(socket_desc, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) < 0)
+          perror("setsockopt(SO_REUSEPORT) failed");
 
 	//bind
 	if( bind(socket_desc,(struct sockaddr *)&server, sizeof(server)) <0)
